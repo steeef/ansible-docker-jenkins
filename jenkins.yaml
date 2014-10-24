@@ -1,0 +1,96 @@
+# jenkins.yaml
+
+- hosts: localhost
+  sudo:  yes
+  vars:
+    use_random: False
+  tasks:
+    - name:     generate random hostname
+      shell:    >
+                echo "$(cat /dev/urandom | tr -cd '[:lower:]' | head -c 8)"
+      when:     use_random == True
+      register: random_hostname
+
+    - name:     "set fact for hostname"
+      #set_fact: docker_hostname="{{ random_hostname.stdout }}"
+      set_fact: docker_hostname="jansible"
+
+    - name:     "docker: run container for jenkins"
+      docker:   >
+                image=steeef/centos_ssh detach=True state=running
+                ports="8005:8080"
+                expose=8080
+                hostname={{ docker_hostname }} name={{ docker_hostname }}
+
+    - name:       add docker container to inventory
+      add_host:   >
+                  name={{ docker_hostname }}
+                  groups=docker
+                  ansible_ssh_host={{ item.NetworkSettings.IPAddress }}
+                  ansible_ssh_port=22
+                  ansible_ssh_user=ansible
+      when:       >
+                  item.Config.Hostname == "{{ docker_hostname }}"
+                  and item.State.Running == True
+      with_items: docker_containers
+
+    - name:       "wait for container's sshd to come up"
+      wait_for:   host={{ item.NetworkSettings.IPAddress }} port=22 state=started
+      when:       item.Config.Hostname == "{{ docker_hostname }}"
+      with_items: docker_containers
+
+- hosts: docker
+  vars:
+    ansible_ssh_private_key_file: ~/.ssh/id_ansible-docker-jenkins
+    jenkins_cli_src:              /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar
+    jenkins_cli:                  /app/jenkins/jenkins-cli.jar
+  sudo:  yes
+  handlers:
+    - name:    jenkins restart
+      service: name=jenkins state=restarted
+  tasks:
+    - name:    "yum: import rpm key"
+      rpm_key: key=http://pkg.jenkins-ci.org/redhat-stable/jenkins-ci.org.key state=present
+
+    - name:    "yum: download Jenkins repo"
+      get_url: >
+               url="http://pkg.jenkins-ci.org/redhat-stable/jenkins.repo"
+               dest=/etc/yum.repos.d/jenkins.repo
+
+    - name: "yum: install openjdk 7"
+      yum:  name=java-1.7.0-openjdk-devel state=present
+
+    - name: "yum: install jenkins"
+      yum:  name=jenkins state=present
+
+    - name:    "Jenkins: start, enable service"
+      service: name=jenkins state=started enabled=yes
+
+    - name:    "Jenkins: create local dir"
+      command: mkdir -p /app/jenkins creates=/app/jenkins
+
+    - name:     "Jenkins: wait for jenkins-cli.jar"
+      wait_for: path={{ jenkins_cli_src }} state=present timeout=60
+
+    - name:    "Jenkins: copy jenkins-cli.jar"
+      command: cp {{ jenkins_cli_src }} {{ jenkins_cli }} creates="{{ jenkins_cli }}"
+
+    - name:     "Jenkins: list plugins"
+      shell:    >
+                java -jar {{ jenkins_cli }} -s http://localhost:8080 list-plugins
+                | cut -f 1 -d ' '
+      register: plugins_installed
+
+    - name:     "Jenkins: List plugins to be updated"
+      shell:    >
+                java -jar {{ jenkins_cli }} -s http://localhost:8080 list-plugins
+                | grep ')$' | cut -f 1 -d ' ' | sed ':a;N;$!ba;s/\n/ /g'
+      register: plugins_updates
+
+    - name:    "Jenkins: Update plugins"
+      command: >
+               java -jar {{ jenkins_cli }} -s http://localhost:8080
+               install-plugin {{ plugins_updates.stdout }}
+      when:    plugins_updates.stdout != ''
+      notify:
+        - jenkins restart
