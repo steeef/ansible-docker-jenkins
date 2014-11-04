@@ -1,4 +1,4 @@
-FROM centos:6
+FROM centos:centos6
 MAINTAINER Stephen Price <stephen@stp5.net>
 
 RUN rpm -Uvh --force http://mirrors.kernel.org/fedora-epel/6/x86_64/epel-release-6-8.noarch.rpm \
