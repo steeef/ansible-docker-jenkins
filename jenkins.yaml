@@ -44,6 +44,16 @@
     ansible_ssh_private_key_file: ~/.ssh/id_ansible-docker-jenkins
     jenkins_cli_src:              /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar
     jenkins_cli:                  /app/jenkins/jenkins-cli.jar
+    plugins:
+      - 'ldap'
+      - 'build-user-vars-plugin'
+      - 'external-monitor-job'
+      - 'greenballs'
+      - 'dashboard-view'
+      - 'disk-usage'
+      - 'git'
+      - 'deploy'
+      - 'htmlpublisher'
   sudo:  yes
   handlers:
     - name:    jenkins restart
@@ -80,6 +90,17 @@
                 java -jar {{ jenkins_cli }} -s http://localhost:8080 list-plugins
                 | cut -f 1 -d ' '
       register: plugins_installed
+
+    - name:       "Jenkins: install plugins"
+      command:    >
+                  java -jar {{ jenkins_cli }} -s http://localhost:8080
+                  install-plugin {{ item }}
+      when:       >
+                  plugins_installed.changed
+                  and plugins_installed.stdout.find("{{ item }}") == -1
+      with_items: plugins
+      notify:
+        - 'jenkins restart'
 
     - name:     "Jenkins: List plugins to be updated"
       shell:    >
